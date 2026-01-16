@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Multi-Semester Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans p-6">
+
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl font-bold text-slate-900">Multi-Semester Analytics</h1>
+            <p class="text-slate-500">Track your SGPA trend and Cumulative GPA</p>
+        </header>
+
+        <div class="flex justify-center mb-8">
+            <div id="drop-zone" class="w-full max-w-2xl border-2 border-dashed border-slate-300 rounded-xl p-8 flex flex-col items-center justify-center text-center bg-white transition-colors cursor-pointer hover:bg-slate-50">
+                <div class="mb-3 text-indigo-500 text-5xl">📈</div>
+                <h3 class="font-semibold text-xl mb-2">Upload Excel with Semester Column</h3>
+                <p class="text-sm text-slate-400 mb-6">Columns: <b>Semester</b>, Code, Course Name, CrdHrs, Grade, Points</p>
+                <input type="file" id="excel-input" accept=".xlsx, .xls" class="hidden">
+                <button onclick="document.getElementById('excel-input').click()" class="bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition font-medium">Select Excel File</button>
+            </div>
+        </div>
+
+        <div id="dashboard" class="hidden space-y-8">
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 border-l-4 border-indigo-500">
+                    <p class="text-slate-500 text-sm font-medium uppercase">Cumulative GPA (CGPA)</p>
+                    <h2 id="kpi-cgpa" class="text-4xl font-bold text-slate-800">0.00</h2>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 border-l-4 border-blue-500">
+                    <p class="text-slate-500 text-sm font-medium uppercase">Total Credits Earned</p>
+                    <h2 id="kpi-credits" class="text-4xl font-bold text-slate-800">0</h2>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100 border-l-4 border-emerald-500">
+                    <p class="text-slate-500 text-sm font-medium uppercase">Semesters Logged</p>
+                    <h2 id="kpi-semesters" class="text-4xl font-bold text-slate-800">0</h2>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                    <h3 class="font-semibold mb-4 text-lg">GPA Trend (Semester vs Cumulative)</h3>
+                    <div class="relative h-72">
+                        <canvas id="trendChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                    <h3 class="font-semibold mb-4 text-lg">Overall Grade Mix</h3>
+                    <div class="relative h-72">
+                        <canvas id="distributionChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                <div class="p-4 border-b border-slate-100 font-bold bg-slate-50 text-lg">Detailed Academic Record</div>
+                <div id="semester-tables" class="divide-y divide-slate-200">
+                    </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Global Chart Instances ---
+        let trendChart = null;
+        let distChart = null;
+
+        // --- File Handling ---
+        document.getElementById('excel-input').addEventListener('change', handleUpload);
+
+        function handleUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                const jsonData = XLSX.utils.sheet_to_json(sheet);
+                processMultiSemesterData(jsonData);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // --- Data Processing ---
+        function processMultiSemesterData(data) {
+            if (!data.length) return alert("File is empty!");
+
+            // 1. Clean & Normalize Data
+            const cleanData = data.map(row => {
+                const getVal = (k) => row[Object.keys(row).find(key => key.toLowerCase().includes(k.toLowerCase()))];
+                return {
+                    Semester: getVal('Semester') || 'Unspecified',
+                    Code: getVal('Code') || '-',
+                    CourseName: getVal('Course Name') || getVal('Name') || 'Course',
+                    CrdHrs: parseFloat(getVal('CrdHrs') || getVal('Credit') || 0),
+                    Grade: getVal('Grade') || '-',
+                    Points: parseFloat(getVal('Points') || 0)
+                };
+            }).filter(d => d.CrdHrs > 0);
+
+            // 2. Group by Semester
+            // We use a Map to keep insertion order (assuming Excel is sorted chronologically)
+            const semesters = new Map();
+            
+            cleanData.forEach(d => {
+                if (!semesters.has(d.Semester)) {
+                    semesters.set(d.Semester, { courses: [], totalPoints: 0, totalCredits: 0 });
+                }
+                const sem = semesters.get(d.Semester);
+                sem.courses.push(d);
+                sem.totalPoints += (d.Points * d.CrdHrs);
+                sem.totalCredits += d.CrdHrs;
+            });
+
+            // 3. Calculate Stats
+            const semLabels = [];
+            const sgpaData = [];
+            const cgpaData = [];
+            
+            let cumulativePoints = 0;
+            let cumulativeCredits = 0;
+
+            semesters.forEach((data, semName) => {
+                // SGPA
+                const sgpa = data.totalCredits > 0 ? (data.totalPoints / data.totalCredits) : 0;
+                
+                // CGPA Running Total
+                cumulativePoints += data.totalPoints;
+                cumulativeCredits += data.totalCredits;
+                const cgpa = cumulativeCredits > 0 ? (cumulativePoints / cumulativeCredits) : 0;
+
+                semLabels.push(semName);
+                sgpaData.push(sgpa.toFixed(2));
+                cgpaData.push(cgpa.toFixed(2));
+            });
+
+            // Update UI
+            updateKPIs(cumulativePoints, cumulativeCredits, semesters.size);
+            renderCharts(semLabels, sgpaData, cgpaData, cleanData);
+            renderTables(semesters);
+            
+            document.getElementById('dashboard').classList.remove('hidden');
+        }
+
+        // --- Visuals ---
+        function updateKPIs(points, credits, semCount) {
+            const cgpa = credits > 0 ? (points / credits).toFixed(2) : "0.00";
+            document.getElementById('kpi-cgpa').innerText = cgpa;
+            document.getElementById('kpi-credits').innerText = credits;
+            document.getElementById('kpi-semesters').innerText = semCount;
+        }
+
+        function renderCharts(labels, sgpa, cgpa, allData) {
+            // 1. Trend Chart (Line)
+            const ctx1 = document.getElementById('trendChart').getContext('2d');
+            if (trendChart) trendChart.destroy();
+
+            trendChart = new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Semester GPA (SGPA)',
+                            data: sgpa,
+                            borderColor: '#6366f1', // Indigo
+                            backgroundColor: '#6366f1',
+                            tension: 0.3,
+                            borderWidth: 3
+                        },
+                        {
+                            label: 'Cumulative GPA (CGPA)',
+                            data: cgpa,
+                            borderColor: '#94a3b8', // Slate
+                            borderDash: [5, 5],
+                            tension: 0.3,
+                            pointRadius: 0,
+                            borderWidth: 2
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { min: 0, max: 4.3 } }
+                }
+            });
+
+            // 2. Grade Distribution (Doughnut)
+            const grades = {};
+            allData.forEach(d => grades[d.Grade] = (grades[d.Grade] || 0) + 1);
+            
+            const ctx2 = document.getElementById('distributionChart').getContext('2d');
+            if (distChart) distChart.destroy();
+
+            distChart = new Chart(ctx2, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(grades),
+                    datasets: [{
+                        data: Object.values(grades),
+                        backgroundColor: ['#6366f1', '#818cf8', '#a5b4fc', '#c7d2fe', '#e0e7ff', '#f1f5f9'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { position: 'right' } }
+                }
+            });
+        }
+
+        function renderTables(semesters) {
+            const container = document.getElementById('semester-tables');
+            container.innerHTML = '';
+
+            semesters.forEach((data, semName) => {
+                const sgpa = (data.totalPoints / data.totalCredits).toFixed(2);
+                
+                // Create Section Header
+                const section = document.createElement('div');
+                section.className = 'p-6';
+                section.innerHTML = `
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-xl font-bold text-slate-800">${semName}</h3>
+                        <span class="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full text-sm font-bold">SGPA: ${sgpa}</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm text-slate-600">
+                            <thead class="bg-slate-50 uppercase text-xs">
+                                <tr>
+                                    <th class="px-4 py-2">Code</th>
+                                    <th class="px-4 py-2">Course</th>
+                                    <th class="px-4 py-2">Credits</th>
+                                    <th class="px-4 py-2">Grade</th>
+                                    <th class="px-4 py-2">Points</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-100">
+                                ${data.courses.map(c => `
+                                    <tr>
+                                        <td class="px-4 py-2 font-medium">${c.Code}</td>
+                                        <td class="px-4 py-2">${c.CourseName}</td>
+                                        <td class="px-4 py-2">${c.CrdHrs}</td>
+                                        <td class="px-4 py-2"><b class="text-slate-800">${c.Grade}</b></td>
+                                        <td class="px-4 py-2">${c.Points}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                container.appendChild(section);
+                
+                // Add separator line
+                container.appendChild(document.createElement('hr'));
+            });
+        }
+    </script>
+</body>
+</html>
