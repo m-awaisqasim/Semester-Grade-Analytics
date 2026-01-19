@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
+import io  # Required for handling the Excel file in memory
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -11,6 +12,36 @@ st.set_page_config(
 )
 
 # --- Helper Functions ---
+
+def generate_sample_excel():
+    """
+    Creates a sample Excel file in memory to demonstrate functionality.
+    """
+    data = {
+        'Semester': [
+            'Fall 2023', 'Fall 2023', 'Fall 2023', 
+            'Spring 2024', 'Spring 2024', 'Spring 2024',
+            'Fall 2024', 'Fall 2024'
+        ],
+        'Code': ['CS101', 'MATH101', 'ENG101', 'CS102', 'MATH102', 'PHY101', 'CS201', 'HIST201'],
+        'Course Name': [
+            'Intro to Programming', 'Calculus I', 'English Composition',
+            'Data Structures', 'Calculus II', 'Physics I', 'Algorithms', 'World History'
+        ],
+        'CrdHrs': [3, 4, 3, 4, 4, 4, 3, 3],
+        'Grade': ['A', 'B+', 'A', 'A-', 'B', 'A', 'A', 'A-'],
+        'Points': [4.0, 3.3, 4.0, 3.7, 3.0, 4.0, 4.0, 3.7]
+    }
+    df = pd.DataFrame(data)
+    
+    # Write to BytesIO buffer
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Transcript')
+    
+    # Seek to the beginning of the stream so it can be read
+    output.seek(0)
+    return output
 
 def clean_data(df):
     """Strips whitespace and ensures numeric types."""
@@ -155,7 +186,6 @@ if uploaded_file:
                 
                 with c1:
                     st.markdown("### **Credit Workload per Semester**")
-                    # Insight: Shows intensity of study load
                     fig_load = px.bar(
                         df_semester_stats, 
                         x='Semester', 
@@ -170,14 +200,13 @@ if uploaded_file:
                 
                 with c2:
                     st.markdown("### **Quality Points Contribution**")
-                    # Insight: Which semesters contributed most to the overall score?
                     fig_qp = px.bar(
                         df_semester_stats,
                         x='Semester',
                         y='Quality Points',
                         title="Academic Momentum",
                         labels={'Quality Points': 'Points Earned'},
-                        color='SGPA', # Color by SGPA to show efficiency
+                        color='SGPA',
                         color_continuous_scale='Viridis'
                     )
                     fig_qp.update_layout(xaxis_title="", template="plotly_white")
@@ -187,7 +216,6 @@ if uploaded_file:
                 st.markdown("### **Performance vs. Course Weight**")
                 st.caption("Do you perform better in lighter or heavier courses?")
                 
-                # Scatter Plot: Credits vs Points
                 fig_scatter = px.scatter(
                     df_full,
                     x='CrdHrs',
@@ -198,7 +226,6 @@ if uploaded_file:
                     labels={'CrdHrs': 'Credit Hours', 'Points': 'Grade Points'},
                     category_orders={"Grade": sorted(df_full['Grade'].unique())}
                 )
-                # Add a line for average points (optional, but helpful)
                 avg_points = df_full['Points'].mean()
                 fig_scatter.add_hline(y=avg_points, line_dash="dot", 
                                       annotation_text=f"Average: {avg_points:.2f}")
@@ -222,4 +249,27 @@ if uploaded_file:
     except Exception as e:
         st.error(f"An error occurred: {e}")
 else:
+    # ===========================
+    # EMPTY STATE
+    # ===========================
     st.info("👆 Please upload an Excel file to generate the dashboard.")
+    
+    st.markdown("---")
+    st.subheader("Don't have a file? Try a Sample!")
+    
+    col_a, col_b, col_c = st.columns([1,2,1])
+    
+    with col_b:
+        st.write("Click the button below to download a pre-formatted Excel file. You can use this file to test the charts and visualizations immediately.")
+        
+        # Generate the file in memory
+        sample_file = generate_sample_excel()
+        
+        # Create the download button
+        st.download_button(
+            label="📥 Download Sample Excel File",
+            data=sample_file,
+            file_name="sample_transcript.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
