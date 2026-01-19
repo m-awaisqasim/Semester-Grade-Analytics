@@ -1,1 +1,1 @@
-python -m streamlit run "Semester Grade Analysis.py"
+streamlit run "Semester Grade Analysis.py"
